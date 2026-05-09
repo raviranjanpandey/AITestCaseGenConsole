@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using TestAIPoc.Models;
 
 namespace TestAIPoc.Persistence;
@@ -33,37 +33,18 @@ public sealed class SqliteRunStore
 
     private async Task RunSqliteAsync(string script)
     {
-        var startInfo = new ProcessStartInfo("sqlite3")
+        var connectionString = new SqliteConnectionStringBuilder
         {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate
+        }.ToString();
 
-        startInfo.ArgumentList.Add(DatabasePath);
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync();
 
-        using var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
-        {
-            throw new InvalidOperationException("Unable to start sqlite3. Ensure sqlite3 is installed on this machine.");
-        }
-
-        await process.StandardInput.WriteAsync(script);
-        process.StandardInput.Close();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().ConfigureAwait(false);
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"sqlite3 failed: {stderr}\n{stdout}");
-        }
+        await using var command = connection.CreateCommand();
+        command.CommandText = script;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static string BuildSqlScript(PipelineResult result)

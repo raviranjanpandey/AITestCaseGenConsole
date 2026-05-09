@@ -13,14 +13,18 @@ public sealed class ContextComposer
             .ToDictionary(evidence => evidence.EvidenceId, evidence => evidence, StringComparer.OrdinalIgnoreCase);
 
         var rules = CollectStatements("business-rule", analysis.SelectedFiles, evidenceMap, [
-            "must", "should", "required", "cannot", "reject", "allow", "only", "unless", "must not"
+            "must", "should", "required", "cannot", "reject", "allow", "only", "unless", "must not",
+            "forbidden", "unauthorized", "permission", "policy", "constraint", "minimum", "maximum"
         ]);
 
         var validations = CollectStatements("validation", analysis.SelectedFiles, evidenceMap, [
-            "validate", "validator", "required", "badrequest", "modelstate", "range", "length", "format", "authorize"
+            "validate", "validator", "required", "badrequest", "modelstate", "range", "length", "format", "authorize",
+            "yup", "zod", "joi", "schema", "throw", "reject", "@valid", "serializer", "raise",
+            "pattern", "minlength", "maxlength", "validation_error", "validationerror"
         ]);
 
-        var flows = BuildFlows(analysis.SelectedFiles, evidenceMap);
+        var flows = BuildFlows(analysis.SelectedFiles, evidenceMap, analysis.PrimaryLanguage,
+            analysis.DetectedLanguages, analysis.ClientWorkspace is not null);
         var dependencies = BuildDependencies(analysis.SelectedFiles, evidenceMap);
         var edgeCases = BuildEdgeCases(analysis.SelectedFiles, evidenceMap);
         var assumptions = BuildAssumptions(run, analysis);
@@ -157,33 +161,142 @@ public sealed class ContextComposer
         return results;
     }
 
-    private static List<ContextStatement> BuildFlows(IReadOnlyList<FileInsight> files, IDictionary<string, EvidenceSnippet> evidenceMap)
+    private static List<ContextStatement> BuildFlows(IReadOnlyList<FileInsight> files,
+        IDictionary<string, EvidenceSnippet> evidenceMap, string primaryLanguage,
+        IReadOnlyList<string> detectedLanguages, bool isDualRepo)
     {
         var results = new List<ContextStatement>();
-        var controllerFile = files.FirstOrDefault(file => file.RelativePath.Contains("controller", StringComparison.OrdinalIgnoreCase));
-        if (controllerFile is not null)
-        {
-            results.Add(new ContextStatement
-            {
-                Id = "FLOW-1",
-                Category = "flow",
-                Text = $"User entry point appears to be `{controllerFile.RelativePath}`; route/action handling should flow through service and validation layers before persistence.",
-                EvidenceIds = controllerFile.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
-                Confidence = controllerFile.Score >= 8 ? "high" : "medium"
-            });
-        }
+        var isFullStack = isDualRepo || LanguageDetector.IsFullStack(detectedLanguages);
 
-        var serviceFile = files.FirstOrDefault(file => file.RelativePath.Contains("service", StringComparison.OrdinalIgnoreCase));
-        if (serviceFile is not null)
+        if (isFullStack)
         {
-            results.Add(new ContextStatement
+            // Server-side API entry point — prefer files tagged "server", fall back to language heuristic
+            var serverFiles = files.Where(f => f.Layer == "server").ToList();
+            var clientFiles = files.Where(f => f.Layer == "client").ToList();
+            var untagged    = files.Where(f => f.Layer is null).ToList();
+
+            var apiPool = serverFiles.Count > 0 ? serverFiles : untagged;
+            var uiPool  = clientFiles.Count > 0 ? clientFiles : untagged;
+
+            var apiEntry =
+                apiPool.FirstOrDefault(f => f.RelativePath.Contains("controller", StringComparison.OrdinalIgnoreCase)) ??
+                apiPool.FirstOrDefault(f => f.Language is "CSharp" or "Java" or "Kotlin" or "Python");
+
+            if (apiEntry is not null)
             {
-                Id = "FLOW-2",
-                Category = "flow",
-                Text = $"Service logic is likely centralized in `{serviceFile.RelativePath}`; capture the request-to-domain transformation there.",
-                EvidenceIds = serviceFile.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
-                Confidence = serviceFile.Score >= 8 ? "high" : "medium"
-            });
+                results.Add(new ContextStatement
+                {
+                    Id = "FLOW-1",
+                    Category = "flow",
+                    Text = $"[Server] API entry point: `{apiEntry.RelativePath}`. HTTP requests arrive here, pass through service and validation layers, then persist to the database. Test HTTP contracts, status codes, request validation, business rules, and authorization.",
+                    EvidenceIds = apiEntry.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
+                    Confidence = apiEntry.Score >= 8 ? "high" : "medium"
+                });
+            }
+
+            var uiEntry =
+                uiPool.FirstOrDefault(f =>
+                    f.RelativePath.Contains("/pages/", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("/routes/", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("App.tsx", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("App.jsx", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("component", StringComparison.OrdinalIgnoreCase)) ??
+                uiPool.FirstOrDefault(f => f.Language is "TypeScript" or "JavaScript");
+
+            if (uiEntry is not null)
+            {
+                results.Add(new ContextStatement
+                {
+                    Id = "FLOW-2",
+                    Category = "flow",
+                    Text = $"[Client] React entry point: `{uiEntry.RelativePath}`. Component drives user interactions, calls the API service layer, and reflects state changes. Test rendering, form validation, API success/failure handling, loading states, and navigation.",
+                    EvidenceIds = uiEntry.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
+                    Confidence = uiEntry.Score >= 8 ? "high" : "medium"
+                });
+            }
+
+            var bridgeFile =
+                uiPool.FirstOrDefault(f =>
+                    f.RelativePath.Contains("service", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("/api/", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("hook", StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Contains("slice", StringComparison.OrdinalIgnoreCase));
+
+            if (bridgeFile is not null)
+            {
+                results.Add(new ContextStatement
+                {
+                    Id = "FLOW-3",
+                    Category = "flow",
+                    Text = $"[Client→Server bridge] `{bridgeFile.RelativePath}` connects the React UI to the .NET API. Test request formation, response deserialization, loading/error states, and network failure handling.",
+                    EvidenceIds = bridgeFile.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
+                    Confidence = bridgeFile.Score >= 6 ? "medium" : "low"
+                });
+            }
+        }
+        else
+        {
+            // Single-stack flow detection
+            var entryFile = primaryLanguage switch
+            {
+                "TypeScript" or "JavaScript" =>
+                    files.FirstOrDefault(f =>
+                        f.RelativePath.Contains("App.tsx", StringComparison.OrdinalIgnoreCase) ||
+                        f.RelativePath.Contains("App.jsx", StringComparison.OrdinalIgnoreCase) ||
+                        f.RelativePath.Contains("router", StringComparison.OrdinalIgnoreCase) ||
+                        f.RelativePath.Contains("/pages/", StringComparison.OrdinalIgnoreCase) ||
+                        f.RelativePath.Contains("/routes/", StringComparison.OrdinalIgnoreCase)) ??
+                    files.FirstOrDefault(f => f.RelativePath.Contains("controller", StringComparison.OrdinalIgnoreCase)),
+                "Python" =>
+                    files.FirstOrDefault(f =>
+                        f.RelativePath.Contains("views.py", StringComparison.OrdinalIgnoreCase) ||
+                        f.RelativePath.Contains("urls.py", StringComparison.OrdinalIgnoreCase)),
+                "Java" or "Kotlin" =>
+                    files.FirstOrDefault(f => f.RelativePath.Contains("Controller", StringComparison.OrdinalIgnoreCase)),
+                _ =>
+                    files.FirstOrDefault(f => f.RelativePath.Contains("controller", StringComparison.OrdinalIgnoreCase))
+            };
+            entryFile ??= files.FirstOrDefault();
+
+            if (entryFile is not null)
+            {
+                var entryKind = primaryLanguage switch
+                {
+                    "TypeScript" or "JavaScript" => "component / page / router",
+                    "Python"                     => "view / URL handler",
+                    "Java" or "Kotlin"           => "controller / REST endpoint",
+                    _                            => "controller / entry point"
+                };
+                results.Add(new ContextStatement
+                {
+                    Id = "FLOW-1",
+                    Category = "flow",
+                    Text = $"Entry point: `{entryFile.RelativePath}` ({entryKind}). Flow should pass through service and validation layers before any state change or persistence.",
+                    EvidenceIds = entryFile.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
+                    Confidence = entryFile.Score >= 8 ? "high" : "medium"
+                });
+            }
+
+            var servicePatterns = primaryLanguage switch
+            {
+                "TypeScript" or "JavaScript" => new[] { "service", "/api/", "store", "hook", "context", "slice" },
+                "Python"                     => new[] { "service", "serializer", "repository" },
+                _                            => new[] { "service", "repository", "manager" }
+            };
+            var serviceFile = files.FirstOrDefault(f =>
+                servicePatterns.Any(p => f.RelativePath.Contains(p, StringComparison.OrdinalIgnoreCase)));
+
+            if (serviceFile is not null)
+            {
+                results.Add(new ContextStatement
+                {
+                    Id = "FLOW-2",
+                    Category = "flow",
+                    Text = $"Service / data logic: `{serviceFile.RelativePath}`. Capture request-to-state transformation and side-effects here.",
+                    EvidenceIds = serviceFile.Evidence.Select(e => e.EvidenceId).Take(2).ToList(),
+                    Confidence = serviceFile.Score >= 8 ? "high" : "medium"
+                });
+            }
         }
 
         if (results.Count == 0 && files.Count > 0)
@@ -192,7 +305,7 @@ public sealed class ContextComposer
             {
                 Id = "FLOW-1",
                 Category = "flow",
-                Text = $"No obvious controller/service split found. Inspect `{files[0].RelativePath}` as the lead implementation file.",
+                Text = $"No obvious entry point found. Inspect `{files[0].RelativePath}` as the lead implementation file.",
                 EvidenceIds = files[0].Evidence.Select(e => e.EvidenceId).Take(1).ToList(),
                 Confidence = "low"
             });
@@ -327,13 +440,19 @@ public sealed class ContextComposer
     {
         var questions = new List<ContextStatement>();
 
-        if (!analysis.SelectedFiles.Any(file => file.RelativePath.Contains("controller", StringComparison.OrdinalIgnoreCase)))
+        var hasEntryPoint = analysis.SelectedFiles.Any(f =>
+            f.RelativePath.Contains("controller", StringComparison.OrdinalIgnoreCase) ||
+            f.RelativePath.Contains("component", StringComparison.OrdinalIgnoreCase) ||
+            f.RelativePath.Contains("/page", StringComparison.OrdinalIgnoreCase) ||
+            f.RelativePath.Contains("view", StringComparison.OrdinalIgnoreCase) ||
+            f.RelativePath.Contains("router", StringComparison.OrdinalIgnoreCase));
+        if (!hasEntryPoint)
         {
             questions.Add(new ContextStatement
             {
                 Id = "Q-1",
                 Category = "open-question",
-                Text = "Which file should be treated as the canonical entry point for this module?",
+                Text = "Which file should be treated as the canonical entry point for this module (controller, page, view, or router)?",
                 EvidenceIds = [],
                 Confidence = "low"
             });
@@ -368,11 +487,22 @@ public sealed class ContextComposer
 
     private static string BuildSummary(PipelineRun run, RepositoryWorkspace workspace, RepositoryAnalysis analysis, IReadOnlyList<ContextStatement> rules, IReadOnlyList<ContextStatement> validations)
     {
-        var topFiles = string.Join(", ", analysis.SelectedFiles.Take(4).Select(file => $"`{file.RelativePath}`"));
+        var topFiles = string.Join(", ", analysis.SelectedFiles.Take(4).Select(file =>
+        {
+            var label = file.Layer is not null ? $"[{file.Layer}] " : string.Empty;
+            return $"`{label}{file.RelativePath}`";
+        }));
+
+        var repoDescription = analysis.ClientWorkspace is not null
+            ? $"server commit `{workspace.CommitSha}` + client commit `{analysis.ClientWorkspace.CommitSha}`"
+            : $"commit `{workspace.CommitSha}`";
+
         return
-            $"The prompt targets `{run.ModuleName}` inside repository commit `{workspace.CommitSha}`. " +
-            $"The analysis prioritized {analysis.SelectedFiles.Count} files, led by {topFiles}. " +
-            $"It surfaced {rules.Count} business rules and {validations.Count} validation signals that should anchor test generation.";
+            $"The prompt targets `{run.ModuleName}` ({repoDescription}). " +
+            $"The analysis selected {analysis.SelectedFiles.Count} files across " +
+            (analysis.ClientWorkspace is not null ? "server and client repositories" : "the repository") +
+            $", led by {topFiles}. " +
+            $"It surfaced {rules.Count} business rule(s) and {validations.Count} validation signal(s) that anchor test generation.";
     }
 
     private static string NormalizeStatement(string text)

@@ -7,6 +7,7 @@ public sealed record PipelineRun
     public required string ModuleName { get; init; }
     public required DateTimeOffset CreatedUtc { get; init; }
     public required string RepositorySource { get; init; }
+    public string? SystemInstruction { get; init; }
 }
 
 public sealed record PipelineResult(
@@ -69,7 +70,10 @@ public sealed record RepositoryWorkspace
 public sealed record RepositoryAnalysis(
     RepositoryWorkspace Workspace,
     IReadOnlyList<FileInsight> SelectedFiles,
-    IReadOnlyList<string> SearchTerms);
+    IReadOnlyList<string> SearchTerms,
+    IReadOnlyList<string> DetectedLanguages,
+    string PrimaryLanguage,
+    RepositoryWorkspace? ClientWorkspace);
 
 public sealed record FileInsight
 {
@@ -82,6 +86,7 @@ public sealed record FileInsight
     public required IReadOnlyList<string> Symbols { get; init; }
     public required IReadOnlyList<string> Usings { get; init; }
     public required IReadOnlyList<EvidenceSnippet> Evidence { get; init; }
+    public string? Layer { get; init; }  // "server", "client", or null for single-repo
 }
 
 public sealed record EvidenceSnippet

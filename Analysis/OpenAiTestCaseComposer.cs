@@ -102,15 +102,21 @@ public sealed class OpenAiTestCaseComposer
         var contextJson = JsonSerializer.Serialize(context, JsonOptions.Pretty);
         var input = BuildPrompt(run, contextJson, analysis, repairPrompt);
 
+        const string defaultInstructions = """
+            You are a senior test design assistant.
+            Generate realistic, module-specific test cases from the supplied repository context.
+            Prefer concrete business rules, validations, flows, edge cases, and authorization scenarios.
+            Do not invent new source facts when context is missing. Use the notes field for assumptions.
+            Return only JSON that matches the provided schema.
+            """;
+
+        var instructions = string.IsNullOrWhiteSpace(run.SystemInstruction)
+            ? defaultInstructions
+            : run.SystemInstruction;
+
         var options = new ResponseCreationOptions
         {
-            Instructions = """
-                You are a senior test design assistant.
-                Generate realistic, module-specific test cases from the supplied repository context.
-                Prefer concrete business rules, validations, flows, edge cases, and authorization scenarios.
-                Do not invent new source facts when context is missing. Use the notes field for assumptions.
-                Return only JSON that matches the provided schema.
-                """,
+            Instructions = instructions,
             MaxOutputTokenCount = 7000,
             Temperature = 0.2f,
             TextOptions = new ResponseTextOptions
@@ -233,7 +239,32 @@ public sealed class OpenAiTestCaseComposer
         var builder = new StringBuilder();
         builder.AppendLine($"Target module: {run.ModuleName}");
         builder.AppendLine($"User prompt: {run.Prompt}");
-        builder.AppendLine($"Repository commit: {run.RepositorySource}");
+
+        if (analysis.ClientWorkspace is not null)
+        {
+            builder.AppendLine($"Server-side repository: {analysis.Workspace.RepositoryPath} (commit: {analysis.Workspace.CommitSha})");
+            builder.AppendLine($"Client-side repository: {analysis.ClientWorkspace.RepositoryPath} (commit: {analysis.ClientWorkspace.CommitSha})");
+            builder.AppendLine($"Stack: .NET Web API (server) + React (client)");
+        }
+        else
+        {
+            builder.AppendLine($"Repository: {run.RepositorySource}");
+        }
+
+        var stackType = LanguageDetector.GetStackType(analysis.DetectedLanguages);
+        builder.AppendLine($"Stack type: {stackType}");
+        builder.AppendLine($"Detected languages: {string.Join(", ", analysis.DetectedLanguages)}");
+
+        if (stackType == "Full-Stack" || analysis.ClientWorkspace is not null)
+        {
+            builder.AppendLine();
+            builder.AppendLine("IMPORTANT — This is a Full-Stack application with separate server and client codebases.");
+            builder.AppendLine("Generate test cases covering BOTH layers:");
+            builder.AppendLine("  [server] .NET Web API — HTTP contracts, status codes, request/model validation, business rules, authorization, error responses.");
+            builder.AppendLine("  [client] React — component rendering, form validation, API call success/failure, loading states, user interactions, routing/navigation.");
+            builder.AppendLine("  [integration] — end-to-end scenarios that trace from the UI action through the API to the data layer.");
+            builder.AppendLine("Prefix each test case title or category with the layer it targets: [server], [client], or [integration].");
+        }
         builder.AppendLine();
         builder.AppendLine("Use this structured context as the only source of truth:");
         builder.AppendLine(contextJson);
