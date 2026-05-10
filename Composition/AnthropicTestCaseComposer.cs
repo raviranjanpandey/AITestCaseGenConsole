@@ -17,7 +17,7 @@ public sealed class AnthropicTestCaseComposer : ITestCaseComposer
 
     public AnthropicTestCaseComposer(string modelName, string? apiKey)
     {
-        _modelName = string.IsNullOrWhiteSpace(modelName) ? "claude-sonnet-4-5" : modelName;
+        _modelName = string.IsNullOrWhiteSpace(modelName) ? "claude-sonnet-4-6" : modelName;
         _apiKey = apiKey;
     }
 
@@ -133,8 +133,7 @@ public sealed class AnthropicTestCaseComposer : ITestCaseComposer
             : defaultSystemInstruction + "\n\nAdditional requirements:\n" + run.SystemInstruction +
               "\nCRITICAL: Return ONLY a valid JSON object. No markdown. No code fences. No explanation.";
 
-        var contextJson = JsonSerializer.Serialize(context, JsonOptions.Pretty);
-        var userPrompt = CompositionPromptBuilder.BuildPrompt(run, contextJson, analysis, repairPrompt);
+        var userPrompt = CompositionPromptBuilder.BuildPrompt(run, context, analysis, repairPrompt);
 
         var messages = new List<Message>
         {

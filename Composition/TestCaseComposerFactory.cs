@@ -6,7 +6,7 @@ public static class TestCaseComposerFactory
         (provider ?? "openai").Trim().ToLowerInvariant() switch
         {
             "claude" or "anthropic" => new AnthropicTestCaseComposer(
-                modelName ?? "claude-sonnet-4-5", apiKey),
+                modelName ?? "claude-sonnet-4-6", apiKey),
             _ => new OpenAiTestCaseComposer(
                 modelName ?? "gpt-5.4-mini", apiKey)
         };

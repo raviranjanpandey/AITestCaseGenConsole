@@ -23,6 +23,7 @@ public sealed record CliOptions
     public string? Model { get; init; }
     public string? SystemInstruction { get; init; }
     public int MaxFiles { get; init; } = 18;
+    public bool AiContextEnabled { get; init; }
     public bool OverwriteDatabase { get; init; } = false;
     public bool ShowHelp { get; init; }
 
@@ -123,6 +124,7 @@ public sealed record CliOptions
             MaxFiles = map.TryGetValue("max-files", out var maxFiles) && int.TryParse(maxFiles, out var parsedMaxFiles)
                 ? Math.Clamp(parsedMaxFiles, 5, 75)
                 : 18,
+            AiContextEnabled = map.ContainsKey("ai-context"),
             OverwriteDatabase = map.TryGetValue("overwrite-db", out var overwriteDb) && string.Equals(overwriteDb, "true", StringComparison.OrdinalIgnoreCase),
             ShowHelp = map.ContainsKey("help")
         };
@@ -149,6 +151,8 @@ Usage:
   --context-json <path>       Override path for context JSON output
   --context-md <path>         Override path for context markdown output
   --max-files <n>             Maximum relevant files to inspect (default 18, max 75)
+  --ai-context                Enable AI-powered deep code analysis for richer context (uses the selected
+                              --provider and --model; adds one extra LLM call before test generation)
   --overwrite-db              Delete and recreate the database on each run (default: records are appended)
   --system-instruction <text> Override the default LLM system instruction for test generation
 

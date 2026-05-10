@@ -97,8 +97,7 @@ public sealed class OpenAiTestCaseComposer : ITestCaseComposer
         RepositoryAnalysis analysis,
         string? repairPrompt)
     {
-        var contextJson = JsonSerializer.Serialize(context, JsonOptions.Pretty);
-        var input = CompositionPromptBuilder.BuildPrompt(run, contextJson, analysis, repairPrompt);
+        var input = CompositionPromptBuilder.BuildPrompt(run, context, analysis, repairPrompt);
 
         const string defaultInstructions = """
             You are a senior QA engineer writing executable test cases for a software feature.
