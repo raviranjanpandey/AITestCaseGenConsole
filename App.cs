@@ -53,6 +53,9 @@ public static class App
         var repositoryManager = new RepositoryManager(new GitCommandRunner(), cacheRoot);
         var analyzer = new RepositoryAnalyzer();
         var contextComposer = new ContextComposer();
+        AiContextComposer? aiContextComposer = options.AiContextEnabled
+            ? new AiContextComposer(provider, options.Model, apiKey, contextComposer)
+            : null;
         var testCaseComposer = TestCaseComposerFactory.Create(provider, options.Model, apiKey);
         var store = new SqliteRunStore(options.DatabasePath ?? Path.Combine(runDir, "testcases.db"));
 
@@ -128,13 +131,17 @@ public static class App
         // ============================================================
         // Stage 3: Context Generation
         // ============================================================
-        WriteStage(3, 4, "Context Generation");
+        var stageTitle = options.AiContextEnabled ? "AI-Enhanced Context Generation" : "Context Generation";
+        WriteStage(3, 4, stageTitle);
         ContextDocument context;
         string contextPath;
         string contextMarkdownPath;
         try
         {
-            WriteStep("Synthesizing business rules, validations, flows, dependencies, and edge cases...");
+            if (options.AiContextEnabled)
+                WriteStep($"Reading source files with {provider} / {aiContextComposer!.ModelName} to generate deep context...");
+            else
+                WriteStep("Synthesizing business rules, validations, flows, dependencies, and edge cases...");
 
             if (clientWorkspace is not null)
             {
@@ -143,10 +150,14 @@ public static class App
                 var clientOnlyAnalysis = FilterAnalysisByLayer(analysis, "client", clientWorkspace);
 
                 WriteStep($"Composing server-side context ({serverOnlyAnalysis.SelectedFiles.Count} file(s))...");
-                var serverContext = contextComposer.Compose(run, workspace, serverOnlyAnalysis);
+                var serverContext = aiContextComposer is not null
+                    ? await aiContextComposer.ComposeAsync(run, workspace, serverOnlyAnalysis)
+                    : contextComposer.Compose(run, workspace, serverOnlyAnalysis);
 
                 WriteStep($"Composing client-side context ({clientOnlyAnalysis.SelectedFiles.Count} file(s))...");
-                var clientContext = contextComposer.Compose(run, clientWorkspace, clientOnlyAnalysis);
+                var clientContext = aiContextComposer is not null
+                    ? await aiContextComposer.ComposeAsync(run, clientWorkspace, clientOnlyAnalysis)
+                    : contextComposer.Compose(run, clientWorkspace, clientOnlyAnalysis);
 
                 WriteStep("Merging server and client contexts...");
                 context = contextComposer.MergeContexts(serverContext, clientContext, run, workspace);
@@ -171,7 +182,9 @@ public static class App
             }
             else
             {
-                context = contextComposer.Compose(run, workspace, analysis);
+                context = aiContextComposer is not null
+                    ? await aiContextComposer.ComposeAsync(run, workspace, analysis)
+                    : contextComposer.Compose(run, workspace, analysis);
             }
 
             WriteStep($"Context built with {context.BusinessRules.Count} business rule(s) and {context.Validations.Count} validation(s).");
@@ -204,6 +217,10 @@ public static class App
             WriteStep($"Calling {provider} test-case composer...");
             generation = await testCaseComposer.ComposeAsync(run, context, analysis);
             WriteStep($"Generated {generation.TestCases.Count} testcase(s) using {generation.Provider} / {generation.ModelName}.");
+
+            var rawResponsePath = Path.Combine(runDir, "raw-llm-response.json");
+            await File.WriteAllTextAsync(rawResponsePath, generation.RawJson, Encoding.UTF8);
+            WriteStep($"Raw LLM response: {rawResponsePath}");
         }
         catch (Exception ex)
         {
@@ -251,6 +268,7 @@ public static class App
         Console.WriteLine($"Gen:      {generation.Provider} / {generation.ModelName}");
         Console.WriteLine($"Context:  {Path.GetFullPath(contextPath)}");
         Console.WriteLine($"Markdown: {Path.GetFullPath(contextMarkdownPath)}");
+        Console.WriteLine($"Raw LLM:  {Path.GetFullPath(Path.Combine(runDir, "raw-llm-response.json"))}");
         Console.WriteLine($"Database: {Path.GetFullPath(store.DatabasePath)}");
 
         return ExitCodes.Success;
