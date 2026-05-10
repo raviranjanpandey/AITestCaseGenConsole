@@ -2,9 +2,9 @@ using System.Text.RegularExpressions;
 using TestAIPoc.Infrastructure;
 using TestAIPoc.Models;
 
-namespace TestAIPoc.Analysis;
+namespace TestAIPoc.Composition;
 
-public sealed class TestCaseComposer
+public sealed class HeuristicTestCaseComposer
 {
     public IReadOnlyList<TestCaseDocument> Compose(PipelineRun run, ContextDocument context, RepositoryAnalysis analysis)
     {
@@ -265,9 +265,9 @@ public sealed class TestCaseComposer
             Id = id,
             Title = title,
             Category = category,
-            Severity = DeriveSeverity(category, risk),
-            TestType = DeriveTestType(category),
-            AutomationSuitability = DeriveAutomationSuitability(category, risk),
+            Severity = CompositionHelpers.DeriveSeverity(category, risk),
+            TestType = CompositionHelpers.DeriveTestType(category),
+            AutomationSuitability = CompositionHelpers.DeriveAutomationSuitability(category, risk),
             Priority = priority,
             Risk = risk,
             Preconditions = preconditions,
@@ -282,35 +282,4 @@ public sealed class TestCaseComposer
 
     private static string Shorten(string text, int length) =>
         text.Length <= length ? text : text[..Math.Max(1, length - 3)] + "...";
-
-    private static string DeriveSeverity(string category, string risk) =>
-        category switch
-        {
-            "security" => "high",
-            "validation" => "high",
-            "negative" => risk.Equals("high", StringComparison.OrdinalIgnoreCase) ? "high" : "medium",
-            "boundary" => "medium",
-            _ => risk.Equals("high", StringComparison.OrdinalIgnoreCase) ? "high" : "medium"
-        };
-
-    private static string DeriveTestType(string category) =>
-        category switch
-        {
-            "validation" => "validation",
-            "negative" => "negative",
-            "boundary" => "boundary",
-            "security" => "security",
-            "functional" => "functional",
-            _ => "regression"
-        };
-
-    private static string DeriveAutomationSuitability(string category, string risk) =>
-        category switch
-        {
-            "security" => "partial",
-            "negative" => "automatable",
-            "boundary" => "automatable",
-            "validation" => "automatable",
-            _ => risk.Equals("high", StringComparison.OrdinalIgnoreCase) ? "partial" : "automatable"
-        };
 }

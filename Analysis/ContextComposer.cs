@@ -505,6 +505,70 @@ public sealed class ContextComposer
             $"It surfaced {rules.Count} business rule(s) and {validations.Count} validation signal(s) that anchor test generation.";
     }
 
+    public ContextDocument MergeContexts(
+        ContextDocument server,
+        ContextDocument client,
+        PipelineRun run,
+        RepositoryWorkspace serverWorkspace)
+    {
+        var mergedSummary =
+            $"Merged context for `{run.ModuleName}` synthesized from both server-side and client-side codebases.\n\n" +
+            $"Server-side: {server.Summary}\n\n" +
+            $"Client-side: {client.Summary}";
+
+        return new ContextDocument
+        {
+            RunId = run.RunId,
+            Prompt = run.Prompt,
+            ModuleName = run.ModuleName,
+            GeneratedUtc = DateTimeOffset.UtcNow,
+            Repository = serverWorkspace,
+            Summary = mergedSummary,
+            BusinessRules = MergeStatements(server.BusinessRules, client.BusinessRules, "BUSINESS-RULE"),
+            Validations   = MergeStatements(server.Validations,   client.Validations,   "VALIDATION"),
+            Flows         = MergeFlows(server.Flows, client.Flows),
+            Dependencies  = MergeStatements(server.Dependencies,  client.Dependencies,  "DEP"),
+            EdgeCases     = MergeStatements(server.EdgeCases,     client.EdgeCases,     "EDGE"),
+            Assumptions   = MergeStatements(server.Assumptions,   client.Assumptions,   "ASSUMP"),
+            OpenQuestions = MergeStatements(server.OpenQuestions, client.OpenQuestions, "Q"),
+            EvidenceFiles = server.EvidenceFiles.Concat(client.EvidenceFiles).ToList()
+        };
+    }
+
+    private static IReadOnlyList<ContextStatement> MergeStatements(
+        IReadOnlyList<ContextStatement> primary,
+        IReadOnlyList<ContextStatement> secondary,
+        string prefix)
+    {
+        var result = new List<ContextStatement>(primary);
+        var seenText = new HashSet<string>(
+            primary.Select(s => DedupKey(s.Text)),
+            StringComparer.OrdinalIgnoreCase);
+        var counter = primary.Count + 1;
+
+        foreach (var stmt in secondary)
+        {
+            if (seenText.Add(DedupKey(stmt.Text)))
+                result.Add(stmt with { Id = $"{prefix}-{counter++}" });
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<ContextStatement> MergeFlows(
+        IReadOnlyList<ContextStatement> serverFlows,
+        IReadOnlyList<ContextStatement> clientFlows)
+    {
+        var result = new List<ContextStatement>();
+        var counter = 1;
+        foreach (var flow in serverFlows.Concat(clientFlows))
+            result.Add(flow with { Id = $"FLOW-{counter++}" });
+        return result;
+    }
+
+    private static string DedupKey(string text) =>
+        text.Length > 80 ? text[..80].ToLowerInvariant().Trim() : text.ToLowerInvariant().Trim();
+
     private static string NormalizeStatement(string text)
     {
         var flattened = string.Join(' ', text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));

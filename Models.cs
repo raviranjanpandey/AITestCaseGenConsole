@@ -145,3 +145,9 @@ public sealed record TestCaseDocument
     public required string OriginCommit { get; init; }
     public required string RunId { get; init; }
 }
+
+public sealed record TestCaseGenerationResult(
+    IReadOnlyList<TestCaseDocument> TestCases,
+    string Provider,
+    string ModelName,
+    string RawJson);

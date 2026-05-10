@@ -18,11 +18,13 @@ public sealed record CliOptions
     public string? DatabasePath { get; init; }
     public string? ContextJsonPath { get; init; }
     public string? ContextMarkdownPath { get; init; }
+    public string? Provider { get; init; }
+    public string? ApiKey { get; init; }
     public string? Model { get; init; }
-    public int MaxFiles { get; init; } = 18;
-    public bool OverwriteDatabase { get; init; } = true;
-    public bool ShowHelp { get; init; }
     public string? SystemInstruction { get; init; }
+    public int MaxFiles { get; init; } = 18;
+    public bool OverwriteDatabase { get; init; } = false;
+    public bool ShowHelp { get; init; }
 
     public RepositorySpec? BuildRepositorySpec()
     {
@@ -33,13 +35,32 @@ public sealed record CliOptions
         if (!string.IsNullOrWhiteSpace(RepoUrl))
             return RepositorySpec.FromRemote(RepoUrl!, Branch, Commit);
 
+        // Client-only mode: treat the client path as the sole repository.
+        if (!string.IsNullOrWhiteSpace(ClientPath))
+            return RepositorySpec.FromLocalPath(ClientPath!);
+
         return null;
     }
 
-    public RepositorySpec? BuildClientRepositorySpec() =>
-        !string.IsNullOrWhiteSpace(ClientPath)
+    public RepositorySpec? BuildClientRepositorySpec()
+    {
+        // Only activate dual-repo mode when a server path is also present.
+        // If only --client-path is given, it becomes the primary workspace above.
+        var hasServerPath = !string.IsNullOrWhiteSpace(RepoPath ?? ServerPath);
+        return hasServerPath && !string.IsNullOrWhiteSpace(ClientPath)
             ? RepositorySpec.FromLocalPath(ClientPath!)
             : null;
+    }
+
+    public string? ResolveApiKey()
+    {
+        if (!string.IsNullOrWhiteSpace(ApiKey))
+            return ApiKey;
+        var provider = (Provider ?? "openai").Trim().ToLowerInvariant();
+        return provider is "claude" or "anthropic"
+            ? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY")
+            : Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+    }
 
     public static CliOptions Parse(string[] args)
     {
@@ -95,41 +116,51 @@ public sealed record CliOptions
             DatabasePath = map.TryGetValue("db", out var db) ? db : null,
             ContextJsonPath = map.TryGetValue("context-json", out var contextJson) ? contextJson : null,
             ContextMarkdownPath = map.TryGetValue("context-md", out var contextMd) ? contextMd : null,
+            Provider = map.TryGetValue("provider", out var provider) ? provider : null,
+            ApiKey = map.TryGetValue("api-key", out var apiKey) ? apiKey : null,
             Model = map.TryGetValue("model", out var model) ? model : null,
+            SystemInstruction = map.TryGetValue("system-instruction", out var si) ? si : null,
             MaxFiles = map.TryGetValue("max-files", out var maxFiles) && int.TryParse(maxFiles, out var parsedMaxFiles)
                 ? Math.Clamp(parsedMaxFiles, 5, 75)
                 : 18,
-            OverwriteDatabase = !map.TryGetValue("append-db", out var appendDb) || !string.Equals(appendDb, "true", StringComparison.OrdinalIgnoreCase),
-            ShowHelp = map.ContainsKey("help"),
-            SystemInstruction = map.TryGetValue("system-instruction", out var si) ? si : null
+            OverwriteDatabase = map.TryGetValue("overwrite-db", out var overwriteDb) && string.Equals(overwriteDb, "true", StringComparison.OrdinalIgnoreCase),
+            ShowHelp = map.ContainsKey("help")
         };
     }
 
     public static string HelpText => """
-TestAIPoc
+TestAIPoc — AI-powered test case generator
 
 Usage:
   --server-path <path>        Server-side (.NET Web API) repository path
   --client-path <path>        Client-side (React / frontend) repository path
   --repo-path <path>          Single repository path (alternative to --server-path)
-  --repo-url <url>            Git or CodeCommit remote URL
+  --repo-url <url>            Git remote URL to clone
   --branch <name>             Branch to checkout when cloning remote repos
-  --commit <sha>              Commit to checkout when cloning remote repos
-  --module <name>             Module name or area, e.g. Leave Apply
-  --prompt <text>             User prompt that describes the test generation request
+  --commit <sha>              Commit SHA to checkout when cloning remote repos
+  --module <name>             Module name or area (e.g. "Leave Apply")
+  --prompt <text>             User prompt describing the test generation request
+  --provider <name>           LLM provider: openai (default) or claude
+  --api-key <key>             API key (overrides OPENAI_API_KEY / ANTHROPIC_API_KEY env vars)
+  --model <name>              Model name for the selected provider
   --cache-dir <path>          Cache root for cloned workspaces
   --output-dir <path>         Directory for context artifacts
   --db <path>                 SQLite database path
   --context-json <path>       Override path for context JSON output
   --context-md <path>         Override path for context markdown output
-  --model <name>              OpenAI model name, defaults to OPENAI_MODEL or gpt-5.1
   --max-files <n>             Maximum relevant files to inspect (default 18, max 75)
-  --append-db                 Preserve existing SQLite rows instead of recreating the database
-  --system-instruction <text> Override the default OpenAI system instruction for test generation
+  --overwrite-db              Delete and recreate the database on each run (default: records are appended)
+  --system-instruction <text> Override the default LLM system instruction for test generation
 
 Examples:
-  dotnet run -- --server-path D:\hrm-api --client-path D:\hrm-frontend --module "Leave Apply" --prompt "Generate tests for leave application flow"
-  dotnet run -- --repo-path /path/to/app --module "Leave Apply" --prompt "Generate tests for leave application flow"
-  dotnet run -- --repo-url https://git-codecommit.us-east-1.amazonaws.com/v1/repos/MyRepo --branch main --module "Leave Apply" --prompt "Generate tests for leave application flow"
+  # OpenAI (default)
+  dotnet run -- --repo-path D:\myapp --prompt "Tests for login" --provider openai --api-key sk-...
+
+  # Claude
+  dotnet run -- --server-path D:\hrm-api --client-path D:\hrm-frontend --module "Leave Apply" --prompt "Generate tests for leave application flow" --provider claude --api-key sk-ant-...
+
+  # Via environment variable
+  $env:ANTHROPIC_API_KEY="sk-ant-..."
+  dotnet run -- --repo-path D:\myapp --prompt "Tests for auth" --provider claude --model claude-opus-4-5
 """;
 }
